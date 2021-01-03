@@ -73,7 +73,7 @@ class AudioSpectrum(object):
         self.RATE = 44100
         self.CHUNK = 1024
         self.CHANNEL = 1
-        p = pyaudio.PyAudio()
+        self._p = pyaudio.PyAudio()
         self._stream = p.open(
             format=pyaudio.paInt16,
             channels=self.CHANNEL,
@@ -110,6 +110,7 @@ class AudioSpectrum(object):
 
     def __del__(self):
         self._stream.close()
+        self._p.terminate()
 
 
 if __name__ == '__main__':

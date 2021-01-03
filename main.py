@@ -3,84 +3,120 @@
 
 import pyaudio
 import numpy as np
-import matplotlib.pyplot as plt
 
-# IDEA:
-# 低い音 -> 青系
+class TerminalAudioSpectrum(object):
+    """
+    ターミナル上に棒グラフを動的に表示するクラス
 
-RATE = 44100
-CHUNK = 1024
-CHANNEL = 1
+    n_bar: バーの数
+    height: バーの高さ（行数）
+    max: 表示音量の最大値（y_limit）
+    active_max: 動的にmaxを変更する
+    slow_down: バーがゆっくり落ちるようにする
+    bar: バーの文字を指定する
+    """
+    def __init__(self, n_bar, height, max=100000, active_max=True, slow_down=True, bar="██"):
+        self.n_bar = n_bar
+        self.height = height
+        self.prev_levels = [0]*n_bar
+        self.max = max
+        self.active_max = active_max
+        self.max_values = [self.max]*20
+        self.bar = bar
+        self.blank = " "*len(bar)
+        self.slow_down = slow_down
 
-XLIM = 10000
+        print("Use Ctrl-C to terminate")
 
+    def show(self, y):
+        # 動的に最大値を変える
+        if self.active_max:
+            self.max_values.pop()
+            self.max_values.append(np.max(y))
+            self.max = np.max(self.max_values)*1.2
 
-def main():
-    p = pyaudio.PyAudio()
-    stream = p.open(
-        format=pyaudio.paInt16,
-        channels=CHANNEL,
-        rate=RATE,
-        input=True
-    )
-    stream.stop_stream()
+        # 各々のバーの高さを計算
+        levels = [yi//(self.max/self.height) for yi in y]
 
-    max_buf = [100000]*10
+        # ゆっくりバーが落ちる処理
+        if self.slow_down:
+            for i in range(len(levels)):
+                if levels[i] < self.prev_levels[i]:
+                    levels[i] = self.prev_levels[i]-2
+                self.prev_levels[i] = levels[i]
 
-    while True:
-        stream.start_stream()
-        buff = stream.read(CHUNK)
-        stream.stop_stream()
+        # 出力する文字列を作成
+        bar_str = ""
+        for i in reversed(range(self.height)):
+            for level in levels:
+                bar_str += " "
+                bar_str += self.bar if level>=i else self.blank
+            bar_str += "\n"
+        bar_str += "\033[{}A".format(self.height)
 
-        fy = np.abs(np.fft.fft(np.frombuffer(buff, dtype='int16')))
-        fx = np.fft.fftfreq(CHUNK, d=1.0/RATE)
+        print(bar_str, end="")
 
-        fy = np.split(fy, 2)[0]
-        fx = np.split(fx, 2)[0]
-
-        a = int(XLIM*CHUNK/RATE)
-
-        fy = fy[:a]
-        fx = fx[:a]
-
-        n_part = 32
-
-        y_s = np.array_split(fy, n_part)
-        y = [np.max(yi) for yi in y_s]
-
-        x_s = np.array_split(fx, n_part)
-        x = [xi[0] for xi in x_s]
-
-        max_buf.pop()
-        max_buf.append(np.max(y))
-
-        """
-        plt.plot(x, y)
-
-        plt.ylim(0, np.mean(max_buf))
-        plt.xlim(0, 10000)
-
-        plt.pause(0.1)
-        plt.cla()
-        """
-
-        ter_print(n_part, y, np.mean(max_buf), 32)
+    def __del__(self):
+        bar_str = ((" "+self.blank)*self.n_bar + "\n")*self.height
+        bar_str += "\033[{}A".format(self.height)
+        print(bar_str)
 
 
-def ter_print(n, y, max, h):
+class AudioSpectrum(object):
+    """
+    オーディオ入力をFFTして、CHUNK毎のx, yを返す
 
-    s = max/h
-    levels = [yi//s for yi in y]
+    n_part: 生データをいくつに分割するか
+    """
+    def __init__(self, n_part):
+        # pyaudio
+        self.RATE = 44100
+        self.CHUNK = 1024
+        self.CHANNEL = 1
+        p = pyaudio.PyAudio()
+        self._stream = p.open(
+            format=pyaudio.paInt16,
+            channels=self.CHANNEL,
+            rate=self.RATE,
+            input=True
+        )
 
-    for i in reversed(range(h)):
-        for level in levels:
-            if level >= i:
-                print(" ███", end="")
-            else:
-                print("    ", end="")
-        print("")
-    print("\033[{}A".format(h), end="")
+        self.XLIM = 10000
+        self.N_PART = n_part
+        self.SENT = int(self.XLIM*self.CHUNK/self.RATE)
+
+    def _read_stream(self):
+        return self._stream.read(self.CHUNK)
+
+    def _fft(self, buffer):
+        # np.frombuffer() でbuffをndarrayに
+        # np.split( ,2) でfxが正の部分のみ切り取る（対称なので半分いらない）
+        y = np.split(np.abs(np.fft.fft(np.frombuffer(buffer, dtype='int16'))), 2)[0]
+        x = np.split(np.fft.fftfreq(self.CHUNK, d=1.0/self.RATE), 2)[0]
+        return x, y
+
+    def _split(self, x, y):
+        # y[:self.SENT] で表示する幅（0~XLIM）にあたる部分のみ切り取る
+        # n等分して部分ごとの最大値をとる（x軸は周波数の目盛りになる）
+        y = [np.max(yi) for yi in np.array_split(y[:self.SENT], self.N_PART)]
+        x = [xi[0] for xi in np.array_split(x[:self.SENT], self.N_PART)]
+        return x, y
+
+    def get(self):
+        return self._split(*self._fft(self._read_stream()))
+
+    def get_raw(self):
+        return self._fft(self._read_stream())
+
+    def __del__(self):
+        self._stream.close()
 
 
 if __name__ == '__main__':
-    main()
+    N = 32
+    a_spectrum = AudioSpectrum(n_part=N)
+    ter_as = TerminalAudioSpectrum(n_bar=N, height=32, max=10000, bar="██")
+
+    while True:
+        x, y = a_spectrum.get()
+        ter_as.show(y)

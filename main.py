@@ -74,7 +74,7 @@ class AudioSpectrum(object):
         self.CHUNK = 1024
         self.CHANNEL = 1
         self._p = pyaudio.PyAudio()
-        self._stream = p.open(
+        self._stream = self._p.open(
             format=pyaudio.paInt16,
             channels=self.CHANNEL,
             rate=self.RATE,
@@ -116,8 +116,8 @@ class AudioSpectrum(object):
 if __name__ == '__main__':
     N = 32
     a_spectrum = AudioSpectrum(n_part=N)
-    ter_as = TerminalAudioSpectrum(n_bar=N, height=32, max=10000, bar="██")
+    ter_as = TerminalAudioSpectrum(n_bar=N-2, height=32, max=10000, bar="██")
 
     while True:
         x, y = a_spectrum.get()
-        ter_as.show(y)
+        ter_as.show(y[2:])

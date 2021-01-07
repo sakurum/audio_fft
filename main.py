@@ -114,10 +114,13 @@ class AudioSpectrum(object):
 
 
 if __name__ == '__main__':
-    N = 32
+    N = 64
+    low_cut = 8
+    high_cut = 4
+
     a_spectrum = AudioSpectrum(n_part=N)
-    ter_as = TerminalAudioSpectrum(n_bar=N-2, height=32, max=10000, bar="██")
+    ter_as = TerminalAudioSpectrum(n_bar=N-low_cut-high_cut, height=32, max=10000, bar="██")
 
     while True:
         x, y = a_spectrum.get()
-        ter_as.show(y[2:])
+        ter_as.show(y[low_cut:-high_cut])

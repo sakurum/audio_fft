@@ -3,18 +3,72 @@
 
 import pyaudio
 import numpy as np
+import threading
+import queue as libqueue
+import time
 
-class TerminalAudioSpectrum(object):
-    """
-    ターミナル上に棒グラフを動的に表示するクラス
+CHANNEL = 1
+RATE = 44100
+CHUNK = 1024
+XLIM = 10000
 
-    n_bar: バーの数
-    height: バーの高さ（行数）
-    max: 表示音量の最大値（y_limit）
-    active_max: 動的にmaxを変更する
-    slow_down: バーがゆっくり落ちるようにする
-    bar: バーの文字を指定する
-    """
+class AudioStream():
+    def __init__(self, queue):
+        self.RATE = RATE
+        self.CHUNK = CHUNK
+        self.CHANNEL = CHANNEL
+        self._p = pyaudio.PyAudio()
+        self._stream = self._p.open(
+            format=pyaudio.paInt16,
+            channels=self.CHANNEL,
+            rate=self.RATE,
+            input=True
+        )
+        self._queue = queue
+
+    def start_read_stream(self):
+        self._stream.start_stream()
+        while self._stream.is_active():
+            self._queue.put(self._stream.read(self.CHUNK))
+
+    def __del__(self):
+        self._stream.close()
+        self._p.terminate()
+
+
+class AudioSpectrum():
+    def __init__(self, queue, n_part):
+        self.XLIM = XLIM
+        self.CHUNK = CHUNK
+        self.RATE = RATE
+        self.N_PART = n_part
+        self.SENT = int(self.XLIM*self.CHUNK/self.RATE)
+        self._queue = queue
+
+    def _get_buffer_array(self):
+        while True:
+            if not self._queue.empty():
+                return self._queue.get_nowait()
+            else:
+                time.sleep(0.001)
+
+
+    def get_spectrum(self):
+        # FFT, split
+        y = np.split(np.abs(np.fft.fft(
+                np.frombuffer(self._get_buffer_array(),
+                dtype='int16'
+            ))), 2)[0]
+        x = np.split(np.fft.fftfreq(self.CHUNK, d=1.0/self.RATE), 2)[0]
+
+        # split (n等分)
+        y = [np.max(yi) for yi in np.array_split(y[:self.SENT], self.N_PART)]
+        x = [xi[0] for xi in np.array_split(x[:self.SENT], self.N_PART)]
+
+        return x, y
+
+
+class TerminalAudioSpectrum():
     def __init__(self, n_bar, height, max=100000, active_max=True, slow_down=True, bar="██"):
         self.n_bar = n_bar
         self.height = height
@@ -42,7 +96,7 @@ class TerminalAudioSpectrum(object):
         if self.slow_down:
             for i in range(len(levels)):
                 if levels[i] < self.prev_levels[i]:
-                    levels[i] = self.prev_levels[i]-2
+                    levels[i] = self.prev_levels[i]-1
                 self.prev_levels[i] = levels[i]
 
         # 出力する文字列を作成
@@ -62,65 +116,32 @@ class TerminalAudioSpectrum(object):
         print(bar_str)
 
 
-class AudioSpectrum(object):
-    """
-    オーディオ入力をFFTして、CHUNK毎のx, yを返す
+def pyaudio_deamon(queue):
+    audio_stream = AudioStream(queue)
+    audio_stream.start_read_stream()
 
-    n_part: 生データをいくつに分割するか
-    """
-    def __init__(self, n_part):
-        # pyaudio
-        self.RATE = 44100
-        self.CHUNK = 1024
-        self.CHANNEL = 1
-        self._p = pyaudio.PyAudio()
-        self._stream = self._p.open(
-            format=pyaudio.paInt16,
-            channels=self.CHANNEL,
-            rate=self.RATE,
-            input=True
-        )
 
-        self.XLIM = 10000
-        self.N_PART = n_part
-        self.SENT = int(self.XLIM*self.CHUNK/self.RATE)
+def spectrum_deamon(queue):
+    N = 16
+    l_cut = 3
+    h_cut = 8
+    spectrum = AudioSpectrum(queue, N)
+    a_terminal = TerminalAudioSpectrum(N-l_cut-h_cut, 30, bar="██████")
 
-    def _read_stream(self):
-        return self._stream.read(self.CHUNK)
+    while True:
+        x, y = spectrum.get_spectrum()
+        a_terminal.show(y[l_cut:-h_cut])
 
-    def _fft(self, buffer):
-        # np.frombuffer() でbuffをndarrayに
-        # np.split( ,2) でfxが正の部分のみ切り取る（対称なので半分いらない）
-        y = np.split(np.abs(np.fft.fft(np.frombuffer(buffer, dtype='int16'))), 2)[0]
-        x = np.split(np.fft.fftfreq(self.CHUNK, d=1.0/self.RATE), 2)[0]
-        return x, y
 
-    def _split(self, x, y):
-        # y[:self.SENT] で表示する幅（0~XLIM）にあたる部分のみ切り取る
-        # n等分して部分ごとの最大値をとる（x軸は周波数の目盛りになる）
-        y = [np.max(yi) for yi in np.array_split(y[:self.SENT], self.N_PART)]
-        x = [xi[0] for xi in np.array_split(x[:self.SENT], self.N_PART)]
-        return x, y
+def main():
+    queue = libqueue.Queue()
 
-    def get(self):
-        return self._split(*self._fft(self._read_stream()))
+    t_pyaudio = threading.Thread(name="pyaudio_deamon", target=pyaudio_deamon, args=(queue,))
+    t_specturm = threading.Thread(name="spectrum_deamon", target=spectrum_deamon, args=(queue,))
 
-    def get_raw(self):
-        return self._fft(self._read_stream())
-
-    def __del__(self):
-        self._stream.close()
-        self._p.terminate()
+    t_pyaudio.start()
+    t_specturm.start()
 
 
 if __name__ == '__main__':
-    N = 64
-    low_cut = 8
-    high_cut = 4
-
-    a_spectrum = AudioSpectrum(n_part=N)
-    ter_as = TerminalAudioSpectrum(n_bar=N-low_cut-high_cut, height=32, max=10000, bar="██")
-
-    while True:
-        x, y = a_spectrum.get()
-        ter_as.show(y[low_cut:-high_cut])
+    main()

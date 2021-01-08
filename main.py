@@ -96,7 +96,7 @@ class TerminalAudioSpectrum():
         if self.slow_down:
             for i in range(len(levels)):
                 if levels[i] < self.prev_levels[i]:
-                    levels[i] = self.prev_levels[i]-1
+                    levels[i] = self.prev_levels[i]*0.9
                 self.prev_levels[i] = levels[i]
 
         # 出力する文字列を作成
@@ -122,16 +122,20 @@ def pyaudio_deamon(queue):
 
 
 def spectrum_deamon(queue):
-    N = 16
+    # N = 16
+    N = 50
+
     l_cut = 3
     h_cut = 8
     spectrum = AudioSpectrum(queue, N)
-    a_terminal = TerminalAudioSpectrum(N-l_cut-h_cut, 30, bar="██████")
+
+    # a_terminal = TerminalAudioSpectrum(N-l_cut-h_cut, 10, bar="██████")
+    a_terminal = TerminalAudioSpectrum(N-l_cut-h_cut, 20, bar="███")
+
 
     while True:
         x, y = spectrum.get_spectrum()
         a_terminal.show(y[l_cut:-h_cut])
-
 
 def main():
     queue = libqueue.Queue()
